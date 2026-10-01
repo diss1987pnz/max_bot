@@ -5,7 +5,7 @@ from maxapi import Bot, Dispatcher
 from maxapi.types import MessageCreated
 
 GAS_URL = os.environ.get("GAS_URL", "https://script.google.com/macros/s/AKfycbwwJ3ya_wBShs2g8dak3-zou7cX5KKoXH-o9gYi3wUf7Cft1iik9InoBpGzDAMZ733tWQ/exec")
-TOKEN = os.environ["f9LHodD0cOLoKMEsXK-CSol125sjE3325sA-02K30aNIj2R41j8npK8S2G60J2cl8JADQZ4SB64Uq2OVbhTn"].strip()
+TOKEN = TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
