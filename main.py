@@ -4,15 +4,26 @@ import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.types import MessageCreated
 
-GAS_URL = os.environ.get("GAS_URL", "https://script.google.com/macros/s/AKfycbwwJ3ya_wBShs2g8dak3-zou7cX5KKoXH-o9gYi3wUf7Cft1iik9InoBpGzDAMZ733tWQ/exec")
-TOKEN = TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
+GAS_URL = os.environ["GAS_URL"]
+TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+processed_ids = set()
 
 @dp.message_created()
 async def handle_message(event: MessageCreated):
     sender = event.message.sender
+
+    if getattr(sender, "is_bot", False):
+        return
+
+    msg_id = getattr(event.message, "message_id", None)
+    if msg_id and msg_id in processed_ids:
+        return
+    if msg_id:
+        processed_ids.add(msg_id)
+
     first_name = getattr(sender, "first_name", "") or ""
     last_name = getattr(sender, "last_name", "") or ""
     user_name = f"{first_name} {last_name}".strip() or "Без имени"
@@ -26,7 +37,8 @@ async def handle_message(event: MessageCreated):
 
     async with aiohttp.ClientSession() as session:
         async with session.post(GAS_URL, json=payload) as resp:
-            print("Ответ GAS:", await resp.json())
+            print(f"Статус GAS: {resp.status}")
+            print(f"Ответ GAS: {(await resp.text())[:300]}")
 
     await event.message.answer("Заявка принята! ✅")
 
