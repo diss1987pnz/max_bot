@@ -1,56 +1,43 @@
-import maxapi.types.attachments.buttons as b
-print("КЛАВИАТУРЫ:", [x for x in dir(b) if not x.startswith('_')])
-raise SystemExit  # дальше не идём, просто смотрим вывод
 import os
 import asyncio
 import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.types import MessageCreated, MessageCallback, CommandStart
-from maxapi.types.attachments.buttons import (
-    Keyboard, Button,
-    InlineKeyboard, CallbackButton,
-)
-from maxapi.context import MemoryContext, State, StatesGroup
+from maxapi.types.attachments.buttons import Button, CallbackButton
 
 GAS_URL = os.environ["GAS_URL"]
 TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# Состояния храним в словаре: user_id -> {"step": ..., "data": {...}}
+states = {}
 processed_ids = set()
 
 
-# ─── Состояния ───────────────────────────────────────────────
-class Form(StatesGroup):
-    department = State()   # выбор своего подразделения
-    fio = State()          # ввод ФИО
-    target = State()       # выбор, куда направить
-    text = State()         # текст обращения
-
-
-# ─── Клавиатура с 4 подразделениями ──────────────────────────
-def units_keyboard() -> InlineKeyboard:
-    return InlineKeyboard(buttons=[
+def units_keyboard():
+    """Клавиатура выбора подразделения (inline, с payload)."""
+    return [
         [CallbackButton(text="АХО", payload="unit:АХО"),
          CallbackButton(text="СГИ", payload="unit:СГИ")],
         [CallbackButton(text="ДП",  payload="unit:ДП"),
          CallbackButton(text="ОИТ", payload="unit:ОИТ")],
-    ])
+    ]
 
 
-# ─── /start — меню ───────────────────────────────────────────
 @dp.message_created(CommandStart())
-async def cmd_start(event: MessageCreated, context: MemoryContext):
-    await context.clear()
-    keyboard = Keyboard(buttons=[
+async def cmd_start(event: MessageCreated):
+    uid = event.message.sender.user_id
+    states.pop(uid, None)
+    keyboard = [
         [Button(text="📝 Создать заявку")],
-    ])
+    ]
     await event.message.answer("Главное меню:", keyboard=keyboard)
 
 
-# ─── Единый обработчик текстов ───────────────────────────────
 @dp.message_created()
-async def handle_message(event: MessageCreated, context: MemoryContext):
+async def handle_message(event: MessageCreated):
     sender = event.message.sender
     if getattr(sender, "is_bot", False):
         return
@@ -61,12 +48,13 @@ async def handle_message(event: MessageCreated, context: MemoryContext):
     if msg_id:
         processed_ids.add(msg_id)
 
+    uid = sender.user_id
     text = (event.message.body.text or "").strip()
-    state = await context.get_state()
+    st = states.setdefault(uid, {"step": None, "data": {}})
 
     # Шаг 1: нажали «Создать заявку»
     if text == "📝 Создать заявку":
-        await context.set_state(Form.department)
+        st["step"] = "department"
         await event.message.answer(
             "Ваше подразделение?",
             keyboard=units_keyboard(),
@@ -74,9 +62,9 @@ async def handle_message(event: MessageCreated, context: MemoryContext):
         return
 
     # Шаг 3: ввод ФИО
-    if state == Form.fio:
-        await context.update_data(fio=text)
-        await context.set_state(Form.target)
+    if st["step"] == "fio":
+        st["data"]["fio"] = text
+        st["step"] = "target"
         await event.message.answer(
             "Куда направить заявку?",
             keyboard=units_keyboard(),
@@ -84,52 +72,59 @@ async def handle_message(event: MessageCreated, context: MemoryContext):
         return
 
     # Шаг 5: ввод текста обращения
-    if state == Form.text:
-        data = await context.get_data()
+    if st["step"] == "text":
+        st["data"]["message"] = text
         payload = {
-            "user_id": str(sender.user_id),
-            "department": data.get("department", ""),
-            "fio": data.get("fio", ""),
-            "target": data.get("target", ""),
-            "message": text,
+            "user_id": str(uid),
+            "department": st["data"].get("department", ""),
+            "fio": st["data"].get("fio", ""),
+            "target": st["data"].get("target", ""),
+            "message": st["data"].get("message", ""),
         }
-
         async with aiohttp.ClientSession() as session:
             async with session.post(GAS_URL, json=payload) as resp:
                 print(f"Статус GAS: {resp.status}")
                 print(f"Ответ GAS: {(await resp.text())[:300]}")
 
-        await context.clear()
+        states.pop(uid, None)
         await event.message.answer("✅ Ваша заявка принята.")
         return
 
-    # Всё остальное вне диалога — игнорируем или подсказываем
+    # Вне диалога
     await event.message.answer(
         "Нажмите «📝 Создать заявку», чтобы оставить обращение."
     )
 
 
-# ─── Обработка нажатий на inline-кнопки ──────────────────────
 @dp.message_callback()
-async def on_callback(event: MessageCallback, context: MemoryContext):
+async def on_callback(event: MessageCallback):
     payload = event.callback.payload or ""
-    state = await context.get_state()
+    uid = event.message.sender.user_id if hasattr(event, "message") else None
+    # ID пользователя из callback — уточните, где он лежит в вашей версии:
+    # возможно event.callback.user.user_id или event.user.user_id
+    # Ниже — универсальная попытка:
+    if uid is None:
+        for attr in ("user", "sender"):
+            obj = getattr(event, attr, None)
+            if obj and hasattr(obj, "user_id"):
+                uid = obj.user_id
+                break
+
+    st = states.setdefault(uid, {"step": None, "data": {}})
 
     if payload.startswith("unit:"):
         unit = payload.split(":", 1)[1]
 
-        # Шаг 2: выбрали своё подразделение
-        if state == Form.department:
-            await context.update_data(department=unit)
-            await context.set_state(Form.fio)
+        if st["step"] == "department":
+            st["data"]["department"] = unit
+            st["step"] = "fio"
             await event.message.answer("Введите Ваше ФИО:")
             await event.answer()
             return
 
-        # Шаг 4: выбрали, куда направить
-        if state == Form.target:
-            await context.update_data(target=unit)
-            await context.set_state(Form.text)
+        if st["step"] == "target":
+            st["data"]["target"] = unit
+            st["step"] = "text"
             await event.message.answer("Введите текст обращения:")
             await event.answer()
             return
