@@ -1,16 +1,9 @@
-from maxapi.types.attachments.buttons import Button, CallbackButton, MessageButton
-import inspect
-
-print("Button fields:", Button.model_fields)
-print("CallbackButton fields:", CallbackButton.model_fields)
-print("MessageButton fields:", MessageButton.model_fields)
-raise SystemExit
 import os
 import asyncio
 import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.types import MessageCreated, MessageCallback, CommandStart
-from maxapi.types.attachments.buttons import Button, CallbackButton
+from maxapi.types.attachments.buttons import MessageButton, CallbackButton
 
 GAS_URL = os.environ["GAS_URL"]
 TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
@@ -24,7 +17,7 @@ processed_ids = set()
 
 
 def units_keyboard():
-    """Клавиатура выбора подразделения (inline, с payload)."""
+    """Inline-клавиатура выбора подразделения."""
     return [
         [CallbackButton(text="АХО", payload="unit:АХО"),
          CallbackButton(text="СГИ", payload="unit:СГИ")],
@@ -38,7 +31,7 @@ async def cmd_start(event: MessageCreated):
     uid = event.message.sender.user_id
     states.pop(uid, None)
     keyboard = [
-        [Button(text="📝 Создать заявку")],
+        [MessageButton(text="📝 Создать заявку")],
     ]
     await event.message.answer("Главное меню:", keyboard=keyboard)
 
@@ -88,10 +81,14 @@ async def handle_message(event: MessageCreated):
             "target": st["data"].get("target", ""),
             "message": st["data"].get("message", ""),
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(GAS_URL, json=payload) as resp:
-                print(f"Статус GAS: {resp.status}")
-                print(f"Ответ GAS: {(await resp.text())[:300]}")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(GAS_URL, json=payload) as resp:
+                    print(f"Статус GAS: {resp.status}")
+                    print(f"Ответ GAS: {(await resp.text())[:300]}")
+        except Exception as e:
+            print(f"Ошибка отправки в GAS: {e}")
 
         states.pop(uid, None)
         await event.message.answer("✅ Ваша заявка принята.")
@@ -105,17 +102,23 @@ async def handle_message(event: MessageCreated):
 
 @dp.message_callback()
 async def on_callback(event: MessageCallback):
-    payload = event.callback.payload or ""
-    uid = event.message.sender.user_id if hasattr(event, "message") else None
-    # ID пользователя из callback — уточните, где он лежит в вашей версии:
-    # возможно event.callback.user.user_id или event.user.user_id
-    # Ниже — универсальная попытка:
+    payload = (event.callback.payload or "") if hasattr(event, "callback") else ""
+
+    # Пытаемся вытащить user_id из разных мест
+    uid = None
+    for attr in ("user", "sender", "from_user"):
+        obj = getattr(event, attr, None)
+        if obj and hasattr(obj, "user_id"):
+            uid = obj.user_id
+            break
+    if uid is None and hasattr(event, "message"):
+        msg_sender = getattr(event.message, "sender", None)
+        if msg_sender and hasattr(msg_sender, "user_id"):
+            uid = msg_sender.user_id
+
     if uid is None:
-        for attr in ("user", "sender"):
-            obj = getattr(event, attr, None)
-            if obj and hasattr(obj, "user_id"):
-                uid = obj.user_id
-                break
+        print("CALLBACK без user_id:", event.model_dump())
+        return
 
     st = states.setdefault(uid, {"step": None, "data": {}})
 
@@ -126,21 +129,31 @@ async def on_callback(event: MessageCallback):
             st["data"]["department"] = unit
             st["step"] = "fio"
             await event.message.answer("Введите Ваше ФИО:")
-            await event.answer()
+            try:
+                await event.answer()
+            except Exception as e:
+                print(f"event.answer ошибка: {e}")
             return
 
         if st["step"] == "target":
             st["data"]["target"] = unit
             st["step"] = "text"
             await event.message.answer("Введите текст обращения:")
-            await event.answer()
+            try:
+                await event.answer()
+            except Exception as e:
+                print(f"event.answer ошибка: {e}")
             return
 
-    await event.answer()
+    try:
+        await event.answer()
+    except Exception as e:
+        print(f"event.answer ошибка: {e}")
 
 
 async def main():
     print("Токен найден, длина:", len(TOKEN))
+    print("GAS_URL длина:", len(GAS_URL))
     await dp.start_polling(bot)
 
 
