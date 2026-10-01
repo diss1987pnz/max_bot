@@ -1,3 +1,6 @@
+import inspect
+from maxapi.types import MessageCreated
+print(inspect.signature(MessageCreated.message.answer))
 import os
 import asyncio
 import aiohttp
