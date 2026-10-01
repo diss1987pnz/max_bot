@@ -3,7 +3,8 @@ import asyncio
 import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.types import MessageCreated, MessageCallback, CommandStart
-from maxapi.types.attachments.buttons import MessageButton, CallbackButton
+from maxapi.types.attachments.buttons import CallbackButton
+from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 GAS_URL = os.environ["GAS_URL"]
 TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
@@ -11,29 +12,39 @@ TOKEN = os.environ["MAX_BOT_TOKEN"].strip()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Состояния храним в словаре: user_id -> {"step": ..., "data": {...}}
 states = {}
 processed_ids = set()
 
 
 def units_keyboard():
     """Inline-клавиатура выбора подразделения."""
-    return [
-        [CallbackButton(text="АХО", payload="unit:АХО"),
-         CallbackButton(text="СГИ", payload="unit:СГИ")],
-        [CallbackButton(text="ДП",  payload="unit:ДП"),
-         CallbackButton(text="ОИТ", payload="unit:ОИТ")],
-    ]
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(text="АХО", payload="unit:АХО"),
+        CallbackButton(text="СГИ", payload="unit:СГИ"),
+    )
+    builder.row(
+        CallbackButton(text="ДП", payload="unit:ДП"),
+        CallbackButton(text="ОИТ", payload="unit:ОИТ"),
+    )
+    return builder.as_markup()
+
+
+def main_menu_keyboard():
+    """Клавиатура главного меню."""
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="📝 Создать заявку", payload="start_form"))
+    return builder.as_markup()
 
 
 @dp.message_created(CommandStart())
 async def cmd_start(event: MessageCreated):
     uid = event.message.sender.user_id
     states.pop(uid, None)
-    keyboard = [
-        [MessageButton(text="📝 Создать заявку")],
-    ]
-    await event.message.answer("Главное меню:", keyboard=keyboard)
+    await event.message.answer(
+        "Главное меню:",
+        attachments=[main_menu_keyboard()],
+    )
 
 
 @dp.message_created()
@@ -52,26 +63,19 @@ async def handle_message(event: MessageCreated):
     text = (event.message.body.text or "").strip()
     st = states.setdefault(uid, {"step": None, "data": {}})
 
-    # Шаг 1: нажали «Создать заявку»
-    if text == "📝 Создать заявку":
-        st["step"] = "department"
-        await event.message.answer(
-            "Ваше подразделение?",
-            keyboard=units_keyboard(),
-        )
-        return
+    print(f"UID={uid} STEP={st['step']} TEXT={text!r}")
 
-    # Шаг 3: ввод ФИО
+    # Ввод ФИО
     if st["step"] == "fio":
         st["data"]["fio"] = text
         st["step"] = "target"
         await event.message.answer(
             "Куда направить заявку?",
-            keyboard=units_keyboard(),
+            attachments=[units_keyboard()],
         )
         return
 
-    # Шаг 5: ввод текста обращения
+    # Ввод текста обращения
     if st["step"] == "text":
         st["data"]["message"] = text
         payload = {
@@ -94,9 +98,10 @@ async def handle_message(event: MessageCreated):
         await event.message.answer("✅ Ваша заявка принята.")
         return
 
-    # Вне диалога
+    # Всё остальное вне диалога
     await event.message.answer(
-        "Нажмите «📝 Создать заявку», чтобы оставить обращение."
+        "Нажмите «📝 Создать заявку», чтобы оставить обращение.",
+        attachments=[main_menu_keyboard()],
     )
 
 
@@ -104,7 +109,7 @@ async def handle_message(event: MessageCreated):
 async def on_callback(event: MessageCallback):
     payload = (event.callback.payload or "") if hasattr(event, "callback") else ""
 
-    # Пытаемся вытащить user_id из разных мест
+    # Достаём user_id из разных возможных мест
     uid = None
     for attr in ("user", "sender", "from_user"):
         obj = getattr(event, attr, None)
@@ -122,6 +127,18 @@ async def on_callback(event: MessageCallback):
 
     st = states.setdefault(uid, {"step": None, "data": {}})
 
+    # Первый шаг: «Создать заявку»
+    if payload == "start_form":
+        st["step"] = "department"
+        st["data"] = {}
+        await event.message.answer(
+            "Ваше подразделение?",
+            attachments=[units_keyboard()],
+        )
+        await _safe_answer(event)
+        return
+
+    # Выбор подразделения или направления
     if payload.startswith("unit:"):
         unit = payload.split(":", 1)[1]
 
@@ -129,22 +146,21 @@ async def on_callback(event: MessageCallback):
             st["data"]["department"] = unit
             st["step"] = "fio"
             await event.message.answer("Введите Ваше ФИО:")
-            try:
-                await event.answer()
-            except Exception as e:
-                print(f"event.answer ошибка: {e}")
+            await _safe_answer(event)
             return
 
         if st["step"] == "target":
             st["data"]["target"] = unit
             st["step"] = "text"
             await event.message.answer("Введите текст обращения:")
-            try:
-                await event.answer()
-            except Exception as e:
-                print(f"event.answer ошибка: {e}")
+            await _safe_answer(event)
             return
 
+    await _safe_answer(event)
+
+
+async def _safe_answer(event):
+    """Гасим callback, если метод есть."""
     try:
         await event.answer()
     except Exception as e:
