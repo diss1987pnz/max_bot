@@ -1,3 +1,6 @@
+import maxapi.types.attachments.buttons as b
+print("КЛАВИАТУРЫ:", [x for x in dir(b) if not x.startswith('_')])
+raise SystemExit  # дальше не идём, просто смотрим вывод
 import os
 import asyncio
 import aiohttp
