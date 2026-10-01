@@ -107,6 +107,7 @@ async def handle_message(event: MessageCreated):
 
 @dp.message_callback()
 async def on_callback(event: MessageCallback):
+    print("=== CALLBACK ПОЛУЧЕН ===", event.model_dump())
     payload = (event.callback.payload or "") if hasattr(event, "callback") else ""
 
     # Достаём user_id из разных возможных мест
