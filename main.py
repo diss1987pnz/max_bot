@@ -1,3 +1,10 @@
+from maxapi.types.attachments.buttons import Button, CallbackButton, MessageButton
+import inspect
+
+print("Button fields:", Button.model_fields)
+print("CallbackButton fields:", CallbackButton.model_fields)
+print("MessageButton fields:", MessageButton.model_fields)
+raise SystemExit
 import os
 import asyncio
 import aiohttp
