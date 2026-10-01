@@ -1,7 +1,3 @@
-import inspect
-from maxapi.types import MessageCreated
-print("ANSWER:", inspect.signature(MessageCreated.message.answer))
-raise SystemExit
 import os
 import asyncio
 import aiohttp
