@@ -81,6 +81,7 @@ async def handle_message(event: MessageCreated):
             "fio": st["data"].get("fio", ""),
             "target": st["data"].get("target", ""),
             "message": st["data"].get("message", ""),
+            "secret": GAS_SECRET,
         }
 
         try:
@@ -88,7 +89,6 @@ async def handle_message(event: MessageCreated):
                 async with session.post(
                     GAS_URL,
                     json=payload,
-                    headers={"X-Secret": GAS_SECRET},
                     allow_redirects=False,
                 ) as resp:
                     print(f"Статус GAS (POST): {resp.status}")
