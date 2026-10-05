@@ -87,12 +87,30 @@ async def handle_message(event: MessageCreated):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(GAS_URL, json=payload) as resp:
-                    print(f"Статус GAS: {resp.status}")
-                    print(f"Ответ GAS: {(await resp.text())[:300]}")
-        except Exception as e:
-            print(f"Ошибка отправки в GAS: {e}")
+    async with aiohttp.ClientSession() as session:
+        # 1. Отправляем POST, но НЕ следуем за редиректом автоматически
+        async with session.post(
+            GAS_URL, 
+            json=payload, 
+            headers={"X-Secret": os.environ["GAS_SECRET"]},
+            allow_redirects=False
+        ) as resp:
+            print(f"Статус GAS (POST): {resp.status}")
+            
+            # 2. Если пришёл редирект (302, 303, 307) — идём по нему вручную через GET
+            if resp.status in (301, 302, 303, 307, 308):
+                location = resp.headers.get("Location")
+                print(f"Редирект на: {location}")
+                if location:
+                    # 3. Выполняем GET по адресу редиректа, чтобы получить ответ от doPost
+                    async with session.get(location) as final_resp:
+                        print(f"Статус GAS (GET): {final_resp.status}")
+                        print(f"Ответ GAS: {(await final_resp.text())[:300]}")
+            else:
+                # Если редиректа нет — читаем ответ сразу
+                print(f"Ответ GAS: {(await resp.text())[:300]}")
+except Exception as e:
+    print(f"Ошибка отправки в GAS: {e}")
 
         states.pop(uid, None)
         await event.message.answer("✅ Ваша заявка принята.")
