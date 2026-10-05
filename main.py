@@ -123,7 +123,7 @@ async def cmd_start(event: MessageCreated):
     uid = event.message.sender.user_id
     states.pop(uid, None)
     await event.message.answer(
-        "Главное меню:",
+        "Нажмите «📝 Создать заявку», чтобы оставить обращение.",
         attachments=[main_menu_keyboard()],
     )
 
@@ -272,9 +272,31 @@ async def _safe_answer(event):
         print(f"event.answer ошибка: {e}")
 
 
+async def set_commands():
+    """Регистрирует команды бота в MAX (для подсказки при вводе «/»)."""
+    url = "https://platform-api2.max.ru/me/commands"
+    headers = {
+        "Authorization": TOKEN,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "commands": [
+            {"name": "start", "description": "Главное меню"},
+        ]
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, json=body, headers=headers) as resp:
+                text = await resp.text()
+                print(f"Регистрация команд: статус {resp.status}, ответ: {text[:300]}")
+    except Exception as e:
+        print(f"Ошибка регистрации команд: {e}")
+
+
 async def main():
     print("Токен найден, длина:", len(TOKEN))
     print("GAS_URL длина:", len(GAS_URL))
+    await set_commands()
     await dp.start_polling(bot)
 
 
