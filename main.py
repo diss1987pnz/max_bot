@@ -33,7 +33,7 @@ def units_keyboard():
 def target_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(
-        CallbackButton(text="АХО", payload="target:АХО"),
+        CallbackButton(text="Диспетчер СГИ", payload="target:Диспетчер СГИ"),
         CallbackButton(text="Тимуровцы", payload="target:Тимуровцы"),
     )
     return builder.as_markup()
