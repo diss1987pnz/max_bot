@@ -18,7 +18,6 @@ processed_ids = set()
 
 
 def units_keyboard():
-    """Inline-клавиатура выбора подразделения."""
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(text="АХО", payload="unit:АХО"),
@@ -32,7 +31,6 @@ def units_keyboard():
 
 
 def main_menu_keyboard():
-    """Клавиатура главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="📝 Создать заявку", payload="start_form"))
     return builder.as_markup()
@@ -66,7 +64,6 @@ async def handle_message(event: MessageCreated):
 
     print(f"UID={uid} STEP={st['step']} TEXT={text!r}")
 
-    # Ввод ФИО
     if st["step"] == "fio":
         st["data"]["fio"] = text
         st["step"] = "target"
@@ -76,7 +73,6 @@ async def handle_message(event: MessageCreated):
         )
         return
 
-    # Ввод текста обращения
     if st["step"] == "text":
         st["data"]["message"] = text
         payload = {
@@ -96,7 +92,6 @@ async def handle_message(event: MessageCreated):
                     allow_redirects=False,
                 ) as resp:
                     print(f"Статус GAS (POST): {resp.status}")
-
                     if resp.status in (301, 302, 303, 307, 308):
                         location = resp.headers.get("Location")
                         print(f"Редирект на: {location}")
@@ -113,7 +108,6 @@ async def handle_message(event: MessageCreated):
         await event.message.answer("✅ Ваша заявка принята.")
         return
 
-    # Всё остальное вне диалога
     await event.message.answer(
         "Нажмите «📝 Создать заявку», чтобы оставить обращение.",
         attachments=[main_menu_keyboard()],
@@ -141,7 +135,6 @@ async def on_callback(event: MessageCallback):
 
     st = states.setdefault(uid, {"step": None, "data": {}})
 
-    # Первый шаг: «Создать заявку»
     if payload == "start_form":
         st["step"] = "department"
         st["data"] = {}
@@ -152,7 +145,6 @@ async def on_callback(event: MessageCallback):
         await _safe_answer(event)
         return
 
-    # Выбор подразделения или направления
     if payload.startswith("unit:"):
         unit = payload.split(":", 1)[1]
 
@@ -174,7 +166,6 @@ async def on_callback(event: MessageCallback):
 
 
 async def _safe_answer(event):
-    """Гасим callback, если метод есть."""
     try:
         await event.answer()
     except Exception as e:
