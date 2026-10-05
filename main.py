@@ -18,6 +18,7 @@ processed_ids = set()
 
 
 def units_keyboard():
+    """Клавиатура выбора своего подразделения (4 кнопки)."""
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(text="АХО", payload="unit:АХО"),
@@ -30,10 +31,51 @@ def units_keyboard():
     return builder.as_markup()
 
 
+def target_keyboard():
+    """Клавиатура выбора, куда направить заявку (2 кнопки)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(text="АХО", payload="target:АХО"),
+        CallbackButton(text="Тимуровцы", payload="target:Тимуровцы"),
+    )
+    return builder.as_markup()
+
+
 def main_menu_keyboard():
+    """Клавиатура главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="📝 Создать заявку", payload="start_form"))
     return builder.as_markup()
+
+
+def extract_photo_url(event):
+    """Пытается извлечь URL фото из сообщения MAX."""
+    try:
+        body = event.message.body
+        # Пробуем разные возможные поля
+        attachments = getattr(body, "attachments", None)
+        if attachments:
+            for att in attachments:
+                # Вариант 1: URL прямо на вложении
+                url = getattr(att, "url", None)
+                if url:
+                    return url
+                # Вариант 2: URL внутри payload
+                payload = getattr(att, "payload", None)
+                if payload:
+                    url = getattr(payload, "url", None)
+                    if url:
+                        return url
+                    # Вариант 3: у фото может быть список sizes с url
+                    photos = getattr(payload, "photos", None) or getattr(payload, "images", None)
+                    if photos and isinstance(photos, list) and photos:
+                        last = photos[-1]
+                        url = getattr(last, "url", None)
+                        if url:
+                            return url
+    except Exception as e:
+        print(f"Ошибка извлечения фото: {e}")
+    return None
 
 
 @dp.message_created(CommandStart())
@@ -64,23 +106,59 @@ async def handle_message(event: MessageCreated):
 
     print(f"UID={uid} STEP={st['step']} TEXT={text!r}")
 
+    # Шаг «ФИО»
     if st["step"] == "fio":
+        if not text:
+            await event.message.answer("Пожалуйста, введите ФИО текстом.")
+            return
         st["data"]["fio"] = text
         st["step"] = "target"
         await event.message.answer(
             "Куда направить заявку?",
-            attachments=[units_keyboard()],
+            attachments=[target_keyboard()],
         )
         return
 
+    # Шаг «Текст обращения»
     if st["step"] == "text":
+        if not text:
+            await event.message.answer("Пожалуйста, введите текст обращения.")
+            return
         st["data"]["message"] = text
+        st["step"] = "photo"
+        await event.message.answer(
+            "Прикрепите фото к заявке (отправьте картинку) "
+            "или напишите «пропустить», чтобы не прикреплять."
+        )
+        return
+
+    # Шаг «Фото»
+    if st["step"] == "photo":
+        if text.lower() in ("пропустить", "skip", "-"):
+            st["data"]["photo_url"] = ""
+        else:
+            photo_url = extract_photo_url(event)
+            if not photo_url:
+                # Отладка: покажем структуру сообщения, чтобы понять, где URL
+                try:
+                    print("DEBUG BODY:", event.message.body.model_dump())
+                except Exception:
+                    print("DEBUG BODY:", event.message.body)
+                await event.message.answer(
+                    "Не удалось распознать фото. Отправьте картинку ещё раз "
+                    "или напишите «пропустить»."
+                )
+                return
+            st["data"]["photo_url"] = photo_url
+
+        # Отправка в GAS
         payload = {
             "user_id": str(uid),
             "department": st["data"].get("department", ""),
             "fio": st["data"].get("fio", ""),
             "target": st["data"].get("target", ""),
             "message": st["data"].get("message", ""),
+            "photo_url": st["data"].get("photo_url", ""),
             "secret": GAS_SECRET,
         }
 
@@ -108,6 +186,7 @@ async def handle_message(event: MessageCreated):
         await event.message.answer("✅ Ваша заявка принята.")
         return
 
+    # Вне диалога
     await event.message.answer(
         "Нажмите «📝 Создать заявку», чтобы оставить обращение.",
         attachments=[main_menu_keyboard()],
@@ -135,6 +214,7 @@ async def on_callback(event: MessageCallback):
 
     st = states.setdefault(uid, {"step": None, "data": {}})
 
+    # Старт формы
     if payload == "start_form":
         st["step"] = "department"
         st["data"] = {}
@@ -145,9 +225,9 @@ async def on_callback(event: MessageCallback):
         await _safe_answer(event)
         return
 
+    # Выбор своего подразделения
     if payload.startswith("unit:"):
         unit = payload.split(":", 1)[1]
-
         if st["step"] == "department":
             st["data"]["department"] = unit
             st["step"] = "fio"
@@ -155,8 +235,11 @@ async def on_callback(event: MessageCallback):
             await _safe_answer(event)
             return
 
+    # Выбор, куда направить
+    if payload.startswith("target:"):
+        target = payload.split(":", 1)[1]
         if st["step"] == "target":
-            st["data"]["target"] = unit
+            st["data"]["target"] = target
             st["step"] = "text"
             await event.message.answer("Введите текст обращения:")
             await _safe_answer(event)
