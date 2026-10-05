@@ -18,7 +18,6 @@ processed_ids = set()
 
 
 def units_keyboard():
-    """Клавиатура выбора своего подразделения (4 кнопки)."""
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(text="АХО", payload="unit:АХО"),
@@ -32,7 +31,6 @@ def units_keyboard():
 
 
 def target_keyboard():
-    """Клавиатура выбора, куда направить заявку (2 кнопки)."""
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(text="АХО", payload="target:АХО"),
@@ -41,32 +39,38 @@ def target_keyboard():
     return builder.as_markup()
 
 
+def photo_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(text="📎 Прикрепить фото", payload="photo:attach"),
+    )
+    builder.row(
+        CallbackButton(text="⏭ Пропустить и отправить заявку", payload="photo:skip"),
+    )
+    return builder.as_markup()
+
+
 def main_menu_keyboard():
-    """Клавиатура главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="📝 Создать заявку", payload="start_form"))
     return builder.as_markup()
 
 
 def extract_photo_url(event):
-    """Пытается извлечь URL фото из сообщения MAX."""
+    """Пытается извлечь URL фото/файла из сообщения MAX."""
     try:
         body = event.message.body
-        # Пробуем разные возможные поля
         attachments = getattr(body, "attachments", None)
         if attachments:
             for att in attachments:
-                # Вариант 1: URL прямо на вложении
                 url = getattr(att, "url", None)
                 if url:
                     return url
-                # Вариант 2: URL внутри payload
                 payload = getattr(att, "payload", None)
                 if payload:
                     url = getattr(payload, "url", None)
                     if url:
                         return url
-                    # Вариант 3: у фото может быть список sizes с url
                     photos = getattr(payload, "photos", None) or getattr(payload, "images", None)
                     if photos and isinstance(photos, list) and photos:
                         last = photos[-1]
@@ -76,6 +80,42 @@ def extract_photo_url(event):
     except Exception as e:
         print(f"Ошибка извлечения фото: {e}")
     return None
+
+
+async def submit_to_gas(uid, st, event):
+    """Отправляет заявку в GAS и отвечает пользователю."""
+    payload = {
+        "user_id": str(uid),
+        "department": st["data"].get("department", ""),
+        "fio": st["data"].get("fio", ""),
+        "target": st["data"].get("target", ""),
+        "message": st["data"].get("message", ""),
+        "photo_url": st["data"].get("photo_url", ""),
+        "secret": GAS_SECRET,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                GAS_URL,
+                json=payload,
+                allow_redirects=False,
+            ) as resp:
+                print(f"Статус GAS (POST): {resp.status}")
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    print(f"Редирект на: {location}")
+                    if location:
+                        async with session.get(location) as final_resp:
+                            print(f"Статус GAS (GET): {final_resp.status}")
+                            print(f"Ответ GAS: {(await final_resp.text())[:300]}")
+                else:
+                    print(f"Ответ GAS: {(await resp.text())[:300]}")
+    except Exception as e:
+        print(f"Ошибка отправки в GAS: {e}")
+
+    states.pop(uid, None)
+    await event.message.answer("✅ Ваша заявка принята.")
 
 
 @dp.message_created(CommandStart())
@@ -127,63 +167,26 @@ async def handle_message(event: MessageCreated):
         st["data"]["message"] = text
         st["step"] = "photo"
         await event.message.answer(
-            "Прикрепите фото к заявке (отправьте картинку) "
-            "или напишите «пропустить», чтобы не прикреплять."
+            "Прикрепите фото\\файлы при необходимости:",
+            attachments=[photo_keyboard()],
         )
         return
 
-    # Шаг «Фото»
-    if st["step"] == "photo":
-        if text.lower() in ("пропустить", "skip", "-"):
-            st["data"]["photo_url"] = ""
-        else:
-            photo_url = extract_photo_url(event)
-            if not photo_url:
-                # Отладка: покажем структуру сообщения, чтобы понять, где URL
-                try:
-                    print("DEBUG BODY:", event.message.body.model_dump())
-                except Exception:
-                    print("DEBUG BODY:", event.message.body)
-                await event.message.answer(
-                    "Не удалось распознать фото. Отправьте картинку ещё раз "
-                    "или напишите «пропустить»."
-                )
-                return
-            st["data"]["photo_url"] = photo_url
-
-        # Отправка в GAS
-        payload = {
-            "user_id": str(uid),
-            "department": st["data"].get("department", ""),
-            "fio": st["data"].get("fio", ""),
-            "target": st["data"].get("target", ""),
-            "message": st["data"].get("message", ""),
-            "photo_url": st["data"].get("photo_url", ""),
-            "secret": GAS_SECRET,
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    GAS_URL,
-                    json=payload,
-                    allow_redirects=False,
-                ) as resp:
-                    print(f"Статус GAS (POST): {resp.status}")
-                    if resp.status in (301, 302, 303, 307, 308):
-                        location = resp.headers.get("Location")
-                        print(f"Редирект на: {location}")
-                        if location:
-                            async with session.get(location) as final_resp:
-                                print(f"Статус GAS (GET): {final_resp.status}")
-                                print(f"Ответ GAS: {(await final_resp.text())[:300]}")
-                    else:
-                        print(f"Ответ GAS: {(await resp.text())[:300]}")
-        except Exception as e:
-            print(f"Ошибка отправки в GAS: {e}")
-
-        states.pop(uid, None)
-        await event.message.answer("✅ Ваша заявка принята.")
+    # Шаг «Фото» — ждём фото после нажатия «Прикрепить фото»
+    if st["step"] == "photo_wait":
+        photo_url = extract_photo_url(event)
+        if not photo_url:
+            try:
+                print("DEBUG BODY:", event.message.body.model_dump())
+            except Exception:
+                print("DEBUG BODY:", event.message.body)
+            await event.message.answer(
+                "Не удалось распознать фото. Отправьте картинку ещё раз "
+                "или нажмите «⏭ Пропустить и отправить заявку»."
+            )
+            return
+        st["data"]["photo_url"] = photo_url
+        await submit_to_gas(uid, st, event)
         return
 
     # Вне диалога
@@ -244,6 +247,20 @@ async def on_callback(event: MessageCallback):
             await event.message.answer("Введите текст обращения:")
             await _safe_answer(event)
             return
+
+    # Фото: прикрепить
+    if payload == "photo:attach" and st["step"] == "photo":
+        st["step"] = "photo_wait"
+        await event.message.answer("Отправьте фото или файл следующим сообщением.")
+        await _safe_answer(event)
+        return
+
+    # Фото: пропустить и отправить
+    if payload == "photo:skip" and st["step"] == "photo":
+        st["data"]["photo_url"] = ""
+        await submit_to_gas(uid, st, event)
+        await _safe_answer(event)
+        return
 
     await _safe_answer(event)
 
